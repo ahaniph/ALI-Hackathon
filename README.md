@@ -1,4 +1,4 @@
-# SponsorScope — Setup & Usage
+# SponsorSearch — Setup & Usage
 
 Find every company that's actually sponsored H-1B visas, with real salary ranges and locations — built straight from DOL public disclosure data.
 
