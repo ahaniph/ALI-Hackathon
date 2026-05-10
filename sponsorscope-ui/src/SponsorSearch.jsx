@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, MapPin, X, ArrowRight, TrendingUp, Loader2, AlertCircle } from 'lucide-react';
+import { Search, MapPin, X, ArrowRight, Loader2, AlertCircle, Upload, FileText } from 'lucide-react';
 
 // ============================================================
 // API CONFIG
@@ -59,6 +59,13 @@ export default function SponsorScope() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [usingMock, setUsingMock] = useState(false);
+
+  // Resume upload state
+  const [resumeFile, setResumeFile] = useState(null);
+  const handleResumeUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) setResumeFile(file);
+  };
 
   // ----- Fetch metadata once on mount -----
   useEffect(() => {
@@ -165,6 +172,7 @@ export default function SponsorScope() {
         button:focus-visible, select:focus-visible { outline: 2px solid ${COLORS.primary}; outline-offset: 2px; }
         .search-btn:hover { background: ${COLORS.primaryDark} !important; }
         .close-btn:hover { background: ${COLORS.primaryLighter} !important; border-color: ${COLORS.primary} !important; }
+        .resume-btn:hover { border-color: ${COLORS.primary} !important; color: ${COLORS.primary} !important; background: ${COLORS.primaryLighter} !important; }
       `}</style>
 
       {/* HEADER */}
@@ -175,14 +183,18 @@ export default function SponsorScope() {
         background: COLORS.bg,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8, background: COLORS.primary,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <TrendingUp size={18} color="white" strokeWidth={2.5} />
-          </div>
+          <img
+            src="data:image/png;base64,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"
+            alt="SponsorSearch logo"
+            style={{
+              width: 36,
+              height: 36,
+              objectFit: 'contain',
+              filter: 'brightness(0) saturate(100%) invert(37%) sepia(98%) saturate(1234%) hue-rotate(202deg) brightness(101%) contrast(97%)',
+            }}
+          />
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em' }}>
-            SponsorScope
+            SponsorSearch
           </h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -202,6 +214,33 @@ export default function SponsorScope() {
           <div style={{ fontSize: 13, color: COLORS.textMuted, fontWeight: 500 }}>
             {meta?.total_rows ? `${meta.total_rows.toLocaleString()} LCA records` : 'Loading…'}
           </div>
+
+          {/* Resume upload */}
+          <label style={{ cursor: 'pointer' }}>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={handleResumeUpload}
+              style={{ display: 'none' }}
+            />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '8px 14px',
+              background: resumeFile ? COLORS.primaryLighter : COLORS.bg,
+              border: `1px solid ${resumeFile ? COLORS.primary : COLORS.border}`,
+              borderRadius: 8,
+              fontSize: 13, fontWeight: 500,
+              color: resumeFile ? COLORS.primary : COLORS.textMuted,
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+              maxWidth: 220,
+            }}>
+              {resumeFile
+                ? <><FileText size={14} strokeWidth={2} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{resumeFile.name}</span></>
+                : <><Upload size={14} strokeWidth={2} />Upload resume</>
+              }
+            </div>
+          </label>
         </div>
       </header>
 
@@ -225,13 +264,7 @@ export default function SponsorScope() {
           <span style={{ color: COLORS.primary }}>actually sponsor</span>{' '}
           your visa.
         </h2>
-        <p style={{
-          fontSize: 18, lineHeight: 1.6, color: COLORS.textMuted,
-          maxWidth: 640, margin: '0 auto', fontWeight: 400,
-        }}>
-          Search every H-1B Labor Condition Application filed in the last 12 months.
-          See real sponsors, real salaries, real locations — not vague job-posting promises.
-        </p>
+
       </section>
 
       {/* SEARCH BAR */}
