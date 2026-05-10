@@ -371,13 +371,28 @@ def _apply_transforms(lca: pd.DataFrame) -> pd.DataFrame:
     lca["worksite_city"] = lca["WORKSITE_CITY"].fillna("").str.strip().str.title()
     lca["worksite_state"] = lca["WORKSITE_STATE"].fillna("").str.strip().str.upper()
 
-    # -- wages (annualised)
+    # -- wages (annualised — both FROM and TO, using the same unit)
     lca["wage_annual"] = lca.apply(
         lambda r: annualise(r["WAGE_RATE_OF_PAY_FROM"], r["WAGE_UNIT_OF_PAY"]), axis=1
+    )
+    lca["wage_annual_to"] = lca.apply(
+        lambda r: annualise(r["WAGE_RATE_OF_PAY_TO"], r["WAGE_UNIT_OF_PAY"])
+        if "WAGE_RATE_OF_PAY_TO" in lca.columns else None, axis=1
     )
     lca["prevailing_wage_annual"] = lca.apply(
         lambda r: annualise(r["PREVAILING_WAGE"], r["PW_UNIT_OF_PAY"]), axis=1
     )
+
+    # -- cap obviously bad wages (misclassified units produce huge numbers)
+    # Realistic H-1B range: $20,000 – $2,000,000
+    WAGE_MIN, WAGE_MAX = 20_000, 2_000_000
+    lca["wage_annual"] = lca["wage_annual"].where(
+        lca["wage_annual"].between(WAGE_MIN, WAGE_MAX), other=float("nan"))
+    lca["prevailing_wage_annual"] = lca["prevailing_wage_annual"].where(
+        lca["prevailing_wage_annual"].between(WAGE_MIN, WAGE_MAX), other=float("nan"))
+    if "wage_annual_to" in lca.columns:
+        lca["wage_annual_to"] = lca["wage_annual_to"].where(
+            lca["wage_annual_to"].between(WAGE_MIN, WAGE_MAX), other=float("nan"))
 
     # -- dates
     lca["start_date"] = pd.to_datetime(lca["BEGIN_DATE"], errors="coerce").dt.strftime("%Y-%m-%d")

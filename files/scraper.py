@@ -157,108 +157,94 @@ def download_xlsx(session: requests.Session, url: str, dest: Path) -> Path:
     return dest
 
 
-def xlsx_to_dataframe(path: Path):
-    """Read a DOL LCA file (.xlsx or .csv) into a pandas DataFrame."""
-    import pandas as pd
-    print(f"  Reading {path.name} …", end="", flush=True)
-    suffix = path.suffix.lower()
-    if suffix in (".xlsx", ".xlsm", ".xls"):
-        df = pd.read_excel(path, engine="openpyxl")
-    elif suffix == ".csv":
-        df = pd.read_csv(path, encoding="latin1", low_memory=False)
-    else:
-        # Try Excel first, fall back to CSV
-        try:
-            df = pd.read_excel(path, engine="openpyxl")
-        except Exception:
-            df = pd.read_csv(path, encoding="latin1", low_memory=False)
-    print(f" {len(df):,} rows")
-    return df
-
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+def read_file_to_dataframe(path: Path):
+    """Read an .xlsx or .csv file into a pandas DataFrame."""
+    import pandas as pd
+    suffix = path.suffix.lower()
+    print(f"  Reading {path.name} …", end="", flush=True)
+    if suffix == ".csv":
+        df = pd.read_csv(path, encoding="latin1", low_memory=False)
+    elif suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(path, engine="openpyxl")
+    else:
+        raise ValueError(f"Unsupported file type: {suffix!r} (expected .xlsx or .csv)")
+    print(f" {len(df):,} rows")
+    return df
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Scrape & clean DOL LCA data.",
-        epilog=(
-            "Examples:\n"
-            "  python scraper.py                          # auto-download latest quarter\n"
-            "  python scraper.py --local data/raw/LCA_Disclosure_Data_FY2026_Q1.xlsx\n"
-            "  python scraper.py --local file1.xlsx file2.xlsx  # merge multiple files\n"
-            "  python scraper.py --quarters 2 --force    # re-download last 2 quarters\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--local", nargs="+", metavar="FILE",
-        help="Skip download; use one or more local .xlsx files directly",
-    )
+    parser = argparse.ArgumentParser(description="Scrape & clean DOL LCA data.")
     parser.add_argument("--quarters", type=int, default=1,
                         help="How many recent quarters to fetch (default: 1)")
     parser.add_argument("--force", action="store_true",
                         help="Re-download even if cached file exists")
     parser.add_argument("--out", default=str(OUTPUT_CSV),
                         help=f"Output CSV path (default: {OUTPUT_CSV})")
+    parser.add_argument("--local", nargs="+", metavar="FILE",
+                        help="Skip all network activity; read directly from these local .xlsx or .csv file(s)")
     args = parser.parse_args()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     import pandas as pd
-    frames = []
 
-    # ----------------------------------------------------------------
-    # MODE A: local files supplied via --local (or auto-detected)
-    # ----------------------------------------------------------------
-    local_paths: list[Path] = []
-
+    # ------------------------------------------------------------------
+    # LOCAL mode — read files directly, no network required
+    # ------------------------------------------------------------------
     if args.local:
-        # Explicit --local paths
-        for p in args.local:
-            local_paths.append(Path(p))
-    else:
-        # Auto-detect: if data/raw/ already has xlsx files and DOL is unreachable,
-        # we'll fall through to MODE B first; but if MODE B finds nothing we'll
-        # pick up whatever is already in data/raw/.
-        pass
-
-    if local_paths:
-        for p in local_paths:
+        frames = []
+        for file_str in args.local:
+            p = Path(file_str)
             if not p.exists():
                 print(f"[ERROR] File not found: {p}")
                 sys.exit(1)
-            print(f"Reading local file: {p}")
-            frames.append(xlsx_to_dataframe(p))
+            print(f"Reading local file: {file_str}")
+            frames.append(read_file_to_dataframe(p))
+
+        combined_raw = pd.concat(frames, ignore_index=True)
+        print(f"\nCombined raw rows: {len(combined_raw):,}")
+
+    # ------------------------------------------------------------------
+    # NETWORK mode — discover and download from DOL
+    # ------------------------------------------------------------------
     else:
-        # ----------------------------------------------------------------
-        # MODE B: discover + download from DOL
-        # ----------------------------------------------------------------
         session = get_session()
+
+        # 1. Discover available file links
         links = discover_links(session)
 
-        # If download discovery failed, fall back to any xlsx already in data/raw/
+        # Smart fallback: if discovery failed, pick up any xlsx files already in data/raw/
         if not links:
-            existing = sorted(CACHE_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
-            if existing:
-                print(f"\n[INFO] Could not reach DOL; found {len(existing)} cached file(s) in {CACHE_DIR}:")
-                for f in existing:
+            cached_files = sorted(CACHE_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if cached_files:
+                print(f"\n[INFO] Network discovery failed but found {len(cached_files)} cached file(s) in {CACHE_DIR}:")
+                for f in cached_files:
                     print(f"  {f.name}")
-                for f in existing[: args.quarters]:
-                    frames.append(xlsx_to_dataframe(f))
+                print("  Using cached files instead. Pass --force to re-download when network is available.")
+                frames = [read_file_to_dataframe(f) for f in cached_files[: args.quarters]]
+                combined_raw = pd.concat(frames, ignore_index=True)
+                print(f"\nCombined raw rows: {len(combined_raw):,}")
             else:
                 print("\n[ERROR] Could not find any LCA disclosure files.")
-                print("  Download the xlsx manually from:")
-                print("  https://www.dol.gov/agencies/eta/foreign-labor/performance")
-                print("  then run:  python scraper.py --local data/raw/<filename>.xlsx")
+                print("  Options:")
+                print("  1. Download manually from:")
+                print("     https://www.dol.gov/agencies/eta/foreign-labor/performance")
+                print("  2. Then run with --local:")
+                print("     python scraper.py --local data/raw/LCA_Disclosure_Data_FY2026_Q1.xlsx")
+                print("  3. Or place the file in data/raw/ and re-run (it will be picked up automatically).")
                 sys.exit(1)
         else:
-            # Sort by FY desc, quarter desc → most recent first
+            # Sort by FY desc, then quarter desc → most recent first
             links.sort(key=lambda x: (x["fy"] or 0, x["quarter"] or 0), reverse=True)
             links = links[: args.quarters]
 
+            frames = []
             for link in links:
                 fname = Path(link["url"]).name
                 cached = CACHE_DIR / fname
@@ -268,14 +254,15 @@ def main():
                 else:
                     print(f"\nFY{link['fy']} Q{link['quarter']}:")
                     download_xlsx(session, link["url"], cached)
-                frames.append(xlsx_to_dataframe(cached))
 
-    if not frames:
-        print("[ERROR] No data frames loaded.")
-        sys.exit(1)
+                frames.append(read_file_to_dataframe(cached))
 
-    combined_raw = pd.concat(frames, ignore_index=True)
-    print(f"\nCombined raw rows: {len(combined_raw):,}")
+            if not frames:
+                print("[ERROR] No data frames loaded.")
+                sys.exit(1)
+
+            combined_raw = pd.concat(frames, ignore_index=True)
+            print(f"\nCombined raw rows: {len(combined_raw):,}")
 
     # 3. Transform
     print("Transforming…")
