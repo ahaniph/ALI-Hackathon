@@ -182,7 +182,7 @@ export default function SponsorScope() {
             <TrendingUp size={18} color="white" strokeWidth={2.5} />
           </div>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em' }}>
-            SponsorScope
+            SponsorSearch
           </h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
