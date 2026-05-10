@@ -158,10 +158,20 @@ def download_xlsx(session: requests.Session, url: str, dest: Path) -> Path:
 
 
 def xlsx_to_dataframe(path: Path):
-    """Read the DOL LCA Excel file into a pandas DataFrame."""
+    """Read a DOL LCA file (.xlsx or .csv) into a pandas DataFrame."""
     import pandas as pd
     print(f"  Reading {path.name} …", end="", flush=True)
-    df = pd.read_excel(path, engine="openpyxl")
+    suffix = path.suffix.lower()
+    if suffix in (".xlsx", ".xlsm", ".xls"):
+        df = pd.read_excel(path, engine="openpyxl")
+    elif suffix == ".csv":
+        df = pd.read_csv(path, encoding="latin1", low_memory=False)
+    else:
+        # Try Excel first, fall back to CSV
+        try:
+            df = pd.read_excel(path, engine="openpyxl")
+        except Exception:
+            df = pd.read_csv(path, encoding="latin1", low_memory=False)
     print(f" {len(df):,} rows")
     return df
 
@@ -171,7 +181,21 @@ def xlsx_to_dataframe(path: Path):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Scrape & clean DOL LCA data.")
+    parser = argparse.ArgumentParser(
+        description="Scrape & clean DOL LCA data.",
+        epilog=(
+            "Examples:\n"
+            "  python scraper.py                          # auto-download latest quarter\n"
+            "  python scraper.py --local data/raw/LCA_Disclosure_Data_FY2026_Q1.xlsx\n"
+            "  python scraper.py --local file1.xlsx file2.xlsx  # merge multiple files\n"
+            "  python scraper.py --quarters 2 --force    # re-download last 2 quarters\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--local", nargs="+", metavar="FILE",
+        help="Skip download; use one or more local .xlsx files directly",
+    )
     parser.add_argument("--quarters", type=int, default=1,
                         help="How many recent quarters to fetch (default: 1)")
     parser.add_argument("--force", action="store_true",
@@ -183,37 +207,68 @@ def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    session = get_session()
-
-    # 1. Discover available file links
-    links = discover_links(session)
-    if not links:
-        print("\n[ERROR] Could not find any LCA disclosure files.")
-        print("  Try manually downloading from:")
-        print("  https://www.dol.gov/agencies/eta/foreign-labor/performance")
-        print("  and placing it in the data/raw/ folder, then run:")
-        print("  python scraper.py --local data/raw/LCA_Disclosure_Data_FY2026_Q1.xlsx")
-        sys.exit(1)
-
-    # Sort by FY desc, then quarter desc → most recent first
-    links.sort(key=lambda x: (x["fy"] or 0, x["quarter"] or 0), reverse=True)
-    links = links[: args.quarters]
-
-    # 2. Download (or use cache)
     import pandas as pd
     frames = []
-    for link in links:
-        fname = Path(link["url"]).name
-        cached = CACHE_DIR / fname
-        if cached.exists() and not args.force:
-            age_hours = (time.time() - cached.stat().st_mtime) / 3600
-            print(f"  Using cached {fname} (age {age_hours:.0f}h).")
-        else:
-            print(f"\nFY{link['fy']} Q{link['quarter']}:")
-            download_xlsx(session, link["url"], cached)
 
-        df_raw = xlsx_to_dataframe(cached)
-        frames.append(df_raw)
+    # ----------------------------------------------------------------
+    # MODE A: local files supplied via --local (or auto-detected)
+    # ----------------------------------------------------------------
+    local_paths: list[Path] = []
+
+    if args.local:
+        # Explicit --local paths
+        for p in args.local:
+            local_paths.append(Path(p))
+    else:
+        # Auto-detect: if data/raw/ already has xlsx files and DOL is unreachable,
+        # we'll fall through to MODE B first; but if MODE B finds nothing we'll
+        # pick up whatever is already in data/raw/.
+        pass
+
+    if local_paths:
+        for p in local_paths:
+            if not p.exists():
+                print(f"[ERROR] File not found: {p}")
+                sys.exit(1)
+            print(f"Reading local file: {p}")
+            frames.append(xlsx_to_dataframe(p))
+    else:
+        # ----------------------------------------------------------------
+        # MODE B: discover + download from DOL
+        # ----------------------------------------------------------------
+        session = get_session()
+        links = discover_links(session)
+
+        # If download discovery failed, fall back to any xlsx already in data/raw/
+        if not links:
+            existing = sorted(CACHE_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if existing:
+                print(f"\n[INFO] Could not reach DOL; found {len(existing)} cached file(s) in {CACHE_DIR}:")
+                for f in existing:
+                    print(f"  {f.name}")
+                for f in existing[: args.quarters]:
+                    frames.append(xlsx_to_dataframe(f))
+            else:
+                print("\n[ERROR] Could not find any LCA disclosure files.")
+                print("  Download the xlsx manually from:")
+                print("  https://www.dol.gov/agencies/eta/foreign-labor/performance")
+                print("  then run:  python scraper.py --local data/raw/<filename>.xlsx")
+                sys.exit(1)
+        else:
+            # Sort by FY desc, quarter desc → most recent first
+            links.sort(key=lambda x: (x["fy"] or 0, x["quarter"] or 0), reverse=True)
+            links = links[: args.quarters]
+
+            for link in links:
+                fname = Path(link["url"]).name
+                cached = CACHE_DIR / fname
+                if cached.exists() and not args.force:
+                    age_hours = (time.time() - cached.stat().st_mtime) / 3600
+                    print(f"  Using cached {fname} (age {age_hours:.0f}h).")
+                else:
+                    print(f"\nFY{link['fy']} Q{link['quarter']}:")
+                    download_xlsx(session, link["url"], cached)
+                frames.append(xlsx_to_dataframe(cached))
 
     if not frames:
         print("[ERROR] No data frames loaded.")
